@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #define LOG_TAG "EffectVisualizer"
 //#define LOG_NDEBUG 0
 #include <log/log.h>
@@ -25,14 +24,9 @@
 #include <time.h>
 #include <math.h>
 #include <audio_effects/effect_visualizer.h>
-#include <cutils/log.h>
-
-
 extern "C" {
-
 // effect_handle_t interface implementation for visualizer effect
 extern const struct effect_interface_s gVisualizerInterface;
-
 // Google Visualizer UUID: d069d9e0-8329-11df-9168-0002a5d5c51b
 const effect_descriptor_t gVisualizerDescriptor = {
         {0xe46b26a0, 0xdddd, 0x11db, 0x8afd, {0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b}}, // type
@@ -44,31 +38,23 @@ const effect_descriptor_t gVisualizerDescriptor = {
         "Visualizer",
         "The Android Open Source Project",
 };
-
 enum visualizer_state_e {
     VISUALIZER_STATE_UNINITIALIZED,
     VISUALIZER_STATE_INITIALIZED,
     VISUALIZER_STATE_ACTIVE,
 };
-
 // maximum time since last capture buffer update before resetting capture buffer. This means
 // that the framework has stopped playing audio and we must start returning silence
 #define MAX_STALL_TIME_MS 1000
-
 #define CAPTURE_BUF_SIZE 65536 // "64k should be enough for everyone"
-
 #define DISCARD_MEASUREMENTS_TIME_MS 2000 // discard measurements older than this number of ms
-
 // maximum number of buffers for which we keep track of the measurements
 #define MEASUREMENT_WINDOW_MAX_SIZE_IN_BUFFERS 25 // note: buffer index is stored in uint8_t
-
-
 struct BufferStats {
     bool mIsValid;
     uint16_t mPeakU16; // the positive peak of the absolute value of the samples in a buffer
     float mRmsSquared; // the average square of the samples in a buffer
 };
-
 struct VisualizerContext {
     const struct effect_interface_s *mItfe;
     effect_config_t mConfig;
@@ -87,7 +73,6 @@ struct VisualizerContext {
     uint8_t mMeasurementBufferIdx;
     BufferStats mPastMeasurements[MEASUREMENT_WINDOW_MAX_SIZE_IN_BUFFERS];
 };
-
 //
 //--- Local functions
 //
@@ -107,8 +92,6 @@ uint32_t Visualizer_getDeltaTimeMsFromUpdatedTime(VisualizerContext* pContext) {
     }
     return deltaMs;
 }
-
-
 void Visualizer_reset(VisualizerContext *pContext)
 {
     pContext->mCaptureIdx = 0;
@@ -117,7 +100,6 @@ void Visualizer_reset(VisualizerContext *pContext)
     pContext->mLatency = 0;
     memset(pContext->mCaptureBuf, 0x80, CAPTURE_BUF_SIZE);
 }
-
 //----------------------------------------------------------------------------
 // Visualizer_setConfig()
 //----------------------------------------------------------------------------
@@ -131,11 +113,9 @@ void Visualizer_reset(VisualizerContext *pContext)
 // Outputs:
 //
 //----------------------------------------------------------------------------
-
 int Visualizer_setConfig(VisualizerContext *pContext, effect_config_t *pConfig)
 {
     ALOGV("Visualizer_setConfig start");
-
     if (pConfig->inputCfg.samplingRate != pConfig->outputCfg.samplingRate) return -EINVAL;
     if (pConfig->inputCfg.channels != pConfig->outputCfg.channels) return -EINVAL;
     if (pConfig->inputCfg.format != pConfig->outputCfg.format) return -EINVAL;
@@ -143,15 +123,10 @@ int Visualizer_setConfig(VisualizerContext *pContext, effect_config_t *pConfig)
     if (pConfig->outputCfg.accessMode != EFFECT_BUFFER_ACCESS_WRITE &&
             pConfig->outputCfg.accessMode != EFFECT_BUFFER_ACCESS_ACCUMULATE) return -EINVAL;
     if (pConfig->inputCfg.format != AUDIO_FORMAT_PCM_16_BIT) return -EINVAL;
-
     pContext->mConfig = *pConfig;
-
     Visualizer_reset(pContext);
-
     return 0;
 }
-
-
 //----------------------------------------------------------------------------
 // Visualizer_getConfig()
 //----------------------------------------------------------------------------
@@ -165,13 +140,10 @@ int Visualizer_setConfig(VisualizerContext *pContext, effect_config_t *pConfig)
 // Outputs:
 //
 //----------------------------------------------------------------------------
-
 void Visualizer_getConfig(VisualizerContext *pContext, effect_config_t *pConfig)
 {
     *pConfig = pContext->mConfig;
 }
-
-
 //----------------------------------------------------------------------------
 // Visualizer_init()
 //----------------------------------------------------------------------------
@@ -183,7 +155,6 @@ void Visualizer_getConfig(VisualizerContext *pContext, effect_config_t *pConfig)
 // Outputs:
 //
 //----------------------------------------------------------------------------
-
 int Visualizer_init(VisualizerContext *pContext)
 {
     pContext->mConfig.inputCfg.accessMode = EFFECT_BUFFER_ACCESS_READ;
@@ -202,11 +173,9 @@ int Visualizer_init(VisualizerContext *pContext)
     pContext->mConfig.outputCfg.bufferProvider.releaseBuffer = NULL;
     pContext->mConfig.outputCfg.bufferProvider.cookie = NULL;
     pContext->mConfig.outputCfg.mask = EFFECT_CONFIG_ALL;
-
     // visualization initialization
     pContext->mCaptureSize = VISUALIZER_CAPTURE_SIZE_MAX;
     pContext->mScalingMode = VISUALIZER_SCALING_MODE_NORMALIZED;
-
     // measurement initialization
     pContext->mChannelCount =
             audio_channel_count_from_out_mask(pContext->mConfig.inputCfg.channels);
@@ -218,109 +187,82 @@ int Visualizer_init(VisualizerContext *pContext)
         pContext->mPastMeasurements[i].mPeakU16 = 0;
         pContext->mPastMeasurements[i].mRmsSquared = 0;
     }
-
     Visualizer_setConfig(pContext, &pContext->mConfig);
-
     return 0;
 }
-
 //
 //--- Effect Library Interface Implementation
 //
-
 int VisualizerLib_Create(const effect_uuid_t *uuid,
                          int32_t /*sessionId*/,
                          int32_t /*ioId*/,
                          effect_handle_t *pHandle) {
     int ret;
     int i;
-
     if (pHandle == NULL || uuid == NULL) {
         return -EINVAL;
     }
-
     if (memcmp(uuid, &gVisualizerDescriptor.uuid, sizeof(effect_uuid_t)) != 0) {
         return -EINVAL;
     }
-
     VisualizerContext *pContext = new VisualizerContext;
-
     pContext->mItfe = &gVisualizerInterface;
     pContext->mState = VISUALIZER_STATE_UNINITIALIZED;
-
     ret = Visualizer_init(pContext);
     if (ret < 0) {
         ALOGW("VisualizerLib_Create() init failed");
         delete pContext;
         return ret;
     }
-
     *pHandle = (effect_handle_t)pContext;
-
     pContext->mState = VISUALIZER_STATE_INITIALIZED;
-
     ALOGV("VisualizerLib_Create %p", pContext);
-
     return 0;
-
 }
-
 int VisualizerLib_Release(effect_handle_t handle) {
     VisualizerContext * pContext = (VisualizerContext *)handle;
-
     ALOGV("VisualizerLib_Release %p", handle);
     if (pContext == NULL) {
         return -EINVAL;
     }
     pContext->mState = VISUALIZER_STATE_UNINITIALIZED;
     delete pContext;
-
     return 0;
 }
-
 int VisualizerLib_GetDescriptor(const effect_uuid_t *uuid,
                                 effect_descriptor_t *pDescriptor) {
-
     if (pDescriptor == NULL || uuid == NULL){
         ALOGV("VisualizerLib_GetDescriptor() called with NULL pointer");
         return -EINVAL;
     }
-
     if (memcmp(uuid, &gVisualizerDescriptor.uuid, sizeof(effect_uuid_t)) == 0) {
         *pDescriptor = gVisualizerDescriptor;
         return 0;
     }
-
     return  -EINVAL;
 } /* end VisualizerLib_GetDescriptor */
-
 //
 //--- Effect Control Interface Implementation
 //
-
 static inline int16_t clamp16(int32_t sample)
 {
     if ((sample>>15) ^ (sample>>31))
         sample = 0x7FFF ^ (sample>>31);
     return sample;
 }
-
 int Visualizer_process(
         effect_handle_t self,audio_buffer_t *inBuffer, audio_buffer_t *outBuffer)
 {
     VisualizerContext * pContext = (VisualizerContext *)self;
-
     if (pContext == NULL) {
         return -EINVAL;
     }
-
     if (inBuffer == NULL || inBuffer->raw == NULL ||
         outBuffer == NULL || outBuffer->raw == NULL ||
         inBuffer->frameCount != outBuffer->frameCount ||
         inBuffer->frameCount == 0) {
         return -EINVAL;
     }
-
     // perform measurements if needed
     if (pContext->mMeasurementMode & MEASUREMENT_MODE_PEAK_RMS) {
         // find the peak and RMS squared for the new buffer
@@ -344,10 +286,8 @@ int Visualizer_process(
             pContext->mMeasurementBufferIdx = 0;
         }
     }
-
     // all code below assumes stereo 16 bit PCM output and input
     int32_t shift;
-
     if (pContext->mScalingMode == VISUALIZER_SCALING_MODE_NORMALIZED) {
         // derive capture scaling factor from peak value in current buffer
         // this gives more interesting captures for display.
@@ -372,7 +312,6 @@ int Visualizer_process(
         assert(pContext->mScalingMode == VISUALIZER_SCALING_MODE_AS_PLAYED);
         shift = 9;
     }
-
     uint32_t captIdx;
     uint32_t inIdx;
     uint8_t *buf = pContext->mCaptureBuf;
@@ -387,7 +326,6 @@ int Visualizer_process(
         smp = smp >> shift;
         buf[captIdx] = ((uint8_t)smp)^0x80;
     }
-
     // XXX the following two should really be atomic, though it probably doesn't
     // matter much for visualization purposes
     pContext->mCaptureIdx = captIdx;
@@ -395,7 +333,6 @@ int Visualizer_process(
     if (clock_gettime(CLOCK_MONOTONIC, &pContext->mBufferUpdateTime) < 0) {
         pContext->mBufferUpdateTime.tv_sec = 0;
     }
-
     if (inBuffer->raw != outBuffer->raw) {
         if (pContext->mConfig.outputCfg.accessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE) {
             for (size_t i = 0; i < outBuffer->frameCount*2; i++) {
@@ -410,36 +347,31 @@ int Visualizer_process(
     }
     return 0;
 }   // end Visualizer_process
-
 int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
         void *pCmdData, uint32_t *replySize, void *pReplyData) {
-
     VisualizerContext * pContext = (VisualizerContext *)self;
     int retsize;
-
     if (pContext == NULL || pContext->mState == VISUALIZER_STATE_UNINITIALIZED) {
         return -EINVAL;
     }
-
 //    ALOGV("Visualizer_command command %" PRIu32 " cmdSize %" PRIu32, cmdCode, cmdSize);
-
     switch (cmdCode) {
     case EFFECT_CMD_INIT:
-        if (pReplyData == NULL || replySize == NULL || *replySize != sizeof(int)) {
+        if (pReplyData == NULL || *replySize != sizeof(int)) {
             return -EINVAL;
         }
         *(int *) pReplyData = Visualizer_init(pContext);
         break;
     case EFFECT_CMD_SET_CONFIG:
         if (pCmdData == NULL || cmdSize != sizeof(effect_config_t)
-                || pReplyData == NULL || replySize == NULL || *replySize != sizeof(int)) {
+                || pReplyData == NULL || *replySize != sizeof(int)) {
             return -EINVAL;
         }
         *(int *) pReplyData = Visualizer_setConfig(pContext,
                 (effect_config_t *) pCmdData);
         break;
     case EFFECT_CMD_GET_CONFIG:
-        if (pReplyData == NULL || replySize == NULL ||
+        if (pReplyData == NULL ||
             *replySize != sizeof(effect_config_t)) {
             return -EINVAL;
         }
@@ -449,7 +381,7 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
         Visualizer_reset(pContext);
         break;
     case EFFECT_CMD_ENABLE:
-        if (pReplyData == NULL || replySize == NULL || *replySize != sizeof(int)) {
+        if (pReplyData == NULL || *replySize != sizeof(int)) {
             return -EINVAL;
         }
         if (pContext->mState != VISUALIZER_STATE_INITIALIZED) {
@@ -460,7 +392,7 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
         *(int *)pReplyData = 0;
         break;
     case EFFECT_CMD_DISABLE:
-        if (pReplyData == NULL || replySize == NULL || *replySize != sizeof(int)) {
+        if (pReplyData == NULL || *replySize != sizeof(int)) {
             return -EINVAL;
         }
         if (pContext->mState != VISUALIZER_STATE_ACTIVE) {
@@ -473,7 +405,7 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
     case EFFECT_CMD_GET_PARAM: {
         if (pCmdData == NULL ||
             cmdSize != (int)(sizeof(effect_param_t) + sizeof(uint32_t)) ||
-            pReplyData == NULL || replySize == NULL ||
+            pReplyData == NULL ||
             *replySize < (int)(sizeof(effect_param_t) + sizeof(uint32_t) + sizeof(uint32_t))) {
             return -EINVAL;
         }
@@ -511,7 +443,7 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
     case EFFECT_CMD_SET_PARAM: {
         if (pCmdData == NULL ||
             cmdSize != (int)(sizeof(effect_param_t) + sizeof(uint32_t) + sizeof(uint32_t)) ||
-            pReplyData == NULL || replySize == NULL || *replySize != sizeof(int32_t)) {
+            pReplyData == NULL || *replySize != sizeof(int32_t)) {
             return -EINVAL;
         }
         *(int32_t *)pReplyData = 0;
@@ -545,18 +477,15 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
     case EFFECT_CMD_SET_VOLUME:
     case EFFECT_CMD_SET_AUDIO_MODE:
         break;
-
-
     case VISUALIZER_CMD_CAPTURE: {
         uint32_t captureSize = pContext->mCaptureSize;
-        if (pReplyData == NULL || replySize == NULL || *replySize != captureSize) {
+        if (pReplyData == NULL || *replySize != captureSize) {
             ALOGV("VISUALIZER_CMD_CAPTURE() error *replySize %" PRIu32 " captureSize %" PRIu32,
                     *replySize, captureSize);
             return -EINVAL;
         }
         if (pContext->mState == VISUALIZER_STATE_ACTIVE) {
             const uint32_t deltaMs = Visualizer_getDeltaTimeMsFromUpdatedTime(pContext);
-
             // if audio framework has stopped playing audio although the effect is still
             // active we must clear the capture buffer to return silence
             if ((pContext->mLastCaptureIdx == pContext->mCaptureIdx) &&
@@ -574,7 +503,6 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
                 const uint32_t deltaSmpl =
                     pContext->mConfig.inputCfg.samplingRate * latencyMs / 1000;
                 int32_t capturePoint = pContext->mCaptureIdx - captureSize - deltaSmpl;
-
                 if (capturePoint < 0) {
                     uint32_t size = -capturePoint;
                     if (size > captureSize) {
@@ -591,23 +519,12 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
                        pContext->mCaptureBuf + capturePoint,
                        captureSize);
             }
-
             pContext->mLastCaptureIdx = pContext->mCaptureIdx;
         } else {
             memset(pReplyData, 0x80, captureSize);
         }
-
         } break;
-
     case VISUALIZER_CMD_MEASURE: {
-        if (pReplyData == NULL || replySize == NULL ||
-                *replySize < (sizeof(int32_t) * MEASUREMENT_COUNT)) {
-            ALOGV("VISUALIZER_CMD_MEASURE() error *replySize %" PRIu32
-                    " < (sizeof(int32_t) * MEASUREMENT_COUNT) %" PRIu32, *replySize,
-                    sizeof(int32_t) * MEASUREMENT_COUNT);
-            android_errorWriteLog(0x534e4554, "30229821");
-            return -EINVAL;
-        }
         uint16_t peakU16 = 0;
         float sumRmsSquared = 0.0f;
         uint8_t nbValidMeasurements = 0;
@@ -654,31 +571,24 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
                 rms, pIntReplyData[MEASUREMENT_IDX_RMS]);
         }
         break;
-
     default:
         ALOGW("Visualizer_command invalid command %" PRIu32, cmdCode);
         return -EINVAL;
     }
-
     return 0;
 }
-
 /* Effect Control Interface Implementation: get_descriptor */
 int Visualizer_getDescriptor(effect_handle_t   self,
                                     effect_descriptor_t *pDescriptor)
 {
     VisualizerContext * pContext = (VisualizerContext *) self;
-
     if (pContext == NULL || pDescriptor == NULL) {
         ALOGV("Visualizer_getDescriptor() invalid param");
         return -EINVAL;
     }
-
     *pDescriptor = gVisualizerDescriptor;
-
     return 0;
 }   /* end Visualizer_getDescriptor */
-
 // effect_handle_t interface implementation for visualizer effect
 const struct effect_interface_s gVisualizerInterface = {
         Visualizer_process,
@@ -686,7 +596,6 @@ const struct effect_interface_s gVisualizerInterface = {
         Visualizer_getDescriptor,
         NULL,
 };
-
 // This is the only symbol that needs to be exported
 __attribute__ ((visibility ("default")))
 audio_effect_library_t AUDIO_EFFECT_LIBRARY_INFO_SYM = {
@@ -698,5 +607,4 @@ audio_effect_library_t AUDIO_EFFECT_LIBRARY_INFO_SYM = {
     .release_effect = VisualizerLib_Release,
     .get_descriptor = VisualizerLib_GetDescriptor,
 };
-
 }; // extern "C"
